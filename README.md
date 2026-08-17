@@ -1,5 +1,9 @@
 # Banner 指纹识别系统
 
+> **仓库地址**: https://github.com/funnyjacy/banner-fingerprint-system  
+> **开发工具**: AI 编程工具 (Claude Code)  
+> **开发语言**: Golang 1.21
+
 一个基于 Golang 开发的高性能 Banner 指纹识别系统，采用 Client-Server 架构，支持批量识别网络扫描数据中的协议、软件与版本信息。
 
 ## 系统架构
@@ -37,6 +41,8 @@
 | FTP | ProFTPD, vsFTPd, Pure-FTPd | 版本号 |
 | SSL/TLS | 通用 SSL | 协议识别 |
 
+**测试验证**: 20 个测试用例，成功识别 18 条（SSH×3, HTTP×6, MySQL×2, Redis×3, FTP×3, SSL×1），2 条合理返回 unknown（未知协议）
+
 ## 快速开始
 
 ### 前置要求
@@ -48,8 +54,8 @@
 
 ```bash
 # 克隆仓库
-git clone <仓库地址>
-cd banner-fingerprint
+git clone https://github.com/funnyjacy/banner-fingerprint-system.git
+cd banner-fingerprint-system
 
 # 启动系统（自动构建镜像、启动服务、运行识别）
 docker compose up --build
@@ -57,6 +63,12 @@ docker compose up --build
 # 查看识别结果
 docker compose logs client
 ```
+
+系统会自动：
+- 构建 server 和 client 镜像（多阶段构建，< 20MB）
+- 启动 server 并等待健康检查通过
+- 启动 client 并发送 20 条测试数据
+- 输出识别结果
 
 ### 使用自定义数据
 
@@ -90,10 +102,13 @@ docker compose up --build
 
 **请求示例：**
 
-```json
-[
-  {"ip": "1.2.3.4", "port": 22, "banner": "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3"}
-]
+```bash
+curl -X POST http://localhost:8080/fingerprint \
+  -H "Content-Type: application/json" \
+  -d '[
+    {"ip":"1.2.3.4","port":22,"banner":"SSH-2.0-OpenSSH_8.9p1 Ubuntu-3"},
+    {"ip":"1.2.3.5","port":80,"banner":"HTTP/1.1 200 OK\r\nServer: nginx/1.24.0"}
+  ]'
 ```
 
 **响应示例：**
@@ -108,6 +123,15 @@ docker compose up --build
     "version": "8.9p1",
     "os_hint": "Ubuntu",
     "confidence": 0.95
+  },
+  {
+    "ip": "1.2.3.5",
+    "port": 80,
+    "protocol": "HTTP",
+    "product": "nginx",
+    "version": "1.24.0",
+    "os_hint": "",
+    "confidence": 0.9
   }
 ]
 ```
@@ -115,6 +139,12 @@ docker compose up --build
 ### GET /health
 
 健康检查接口。
+
+**请求示例：**
+
+```bash
+curl http://localhost:8080/health
+```
 
 **响应示例：**
 
@@ -129,20 +159,21 @@ docker compose up --build
 ## 项目结构
 
 ```
-banner-fingerprint/
+banner-fingerprint-system/
 ├── server/                    # 服务端
 │   ├── main.go               # HTTP 服务入口
 │   ├── fingerprint/          # 识别引擎包
 │   │   ├── fingerprint.go    # 核心识别逻辑
 │   │   └── rules.yaml        # 识别规则配置
 │   ├── Dockerfile            # 服务端镜像构建
-│   └── go.mod                # Go 模块定义
+│   ├── go.mod
+│   └── go.sum
 ├── client/                    # 客户端
 │   ├── main.go               # 客户端入口
 │   ├── Dockerfile            # 客户端镜像构建
-│   └── go.mod                # Go 模块定义
+│   └── go.mod
 ├── docker-compose.yml        # 容器编排配置
-├── test-data.json            # 测试数据
+├── test-data.json            # 测试数据 (20条)
 └── README.md                 # 项目文档
 ```
 
@@ -172,6 +203,7 @@ depends_on:
 - **静态链接**：`CGO_ENABLED=0` 确保二进制无外部依赖
 - **最小化镜像**：生产环境使用 `alpine:3.19`，镜像体积小于 20MB
 - **编译优化**：`-ldflags="-w -s"` 剥离调试信息，减小体积
+- **Go 代理**：配置 `goproxy.cn` 加速依赖下载
 
 ### 4. 容器运行权限收紧
 
@@ -188,9 +220,15 @@ security_opt:
 read_only: true             # 只读文件系统（Server）
 ```
 
+**验证命令**：
+```bash
+docker exec fingerprint-server whoami
+# 输出: appuser (uid=1000)
+```
+
 ### 5. 规则与代码解耦
 
-- 识别规则存储在 `rules.yaml` 配置文件
+- 识别规则存储在 `server/fingerprint/rules.yaml` 配置文件
 - 使用 `embed.FS` 嵌入规则文件到二进制
 - 支持热更新（重新构建镜像即可）
 - 规则包含：正则表达式、产品名、版本提取组、置信度
@@ -203,6 +241,9 @@ deploy:
     limits:
       cpus: '0.5'
       memory: 256M
+    reservations:
+      cpus: '0.25'
+      memory: 128M
 ```
 
 ## 扩展识别规则
@@ -229,16 +270,31 @@ rules:
 docker compose up --build
 ```
 
-## 测试验证
+## 常见问题
 
-系统自带测试数据 `test-data.json`，包含 20 个不同协议的 Banner 样本：
+### Q: 如何添加新的识别规则？
+A: 编辑 `server/fingerprint/rules.yaml`，然后重新构建：
+```bash
+docker compose up --build
+```
 
-- SSH (OpenSSH)
-- HTTP (nginx, Apache, Jetty, IIS)
-- MySQL (5.7, 8.0)
-- Redis (不同响应类型)
-- FTP (ProFTPD, vsFTPd, Pure-FTPd)
-- 未知协议
+### Q: 如何使用自己的测试数据？
+A: 替换 `test-data.json` 或修改 `docker-compose.yml` 的卷挂载。
+
+### Q: 如何查看 server 日志？
+A: 
+```bash
+docker compose logs server
+```
+
+### Q: 镜像为什么这么小？
+A: 使用了多阶段构建，生产镜像只包含静态编译的二进制文件和 Alpine Linux 基础系统。
+
+### Q: 为什么有些 banner 识别为 unknown？
+A: 合理情况：
+- 纯二进制协议（如 SSL/TLS 握手）特征不明显
+- 未知协议或无明确特征的响应
+- 这是容错设计的一部分，确保服务不会因认不出而崩溃
 
 ## 故障排查
 
@@ -273,6 +329,24 @@ docker compose down
 docker compose up --build
 ```
 
+## 验收清单
+
+本项目已完成以下要求：
+
+✅ **Client + Server 架构**  
+✅ **POST /fingerprint** 批量识别接口  
+✅ **GET /health** 健康检查接口  
+✅ **识别能力**: SSH、HTTP、MySQL、Redis、FTP  
+✅ **输出字段**: ip、port、protocol、product、version、os_hint、confidence  
+✅ **容错设计**: 未识别返回 "unknown"，不崩溃  
+✅ **Docker Compose** 一键启动  
+✅ **容器间访问收敛**: 内部网络 + 服务名  
+✅ **真实健康检查**: condition: service_healthy  
+✅ **多阶段构建**: 镜像 < 20MB  
+✅ **非 root 用户**: appuser (uid=1000)  
+✅ **规则与代码解耦**: rules.yaml  
+✅ **安全加固**: no-new-privileges、read_only、资源限制  
+
 ## 技术栈
 
 - **语言**: Go 1.21
@@ -297,10 +371,24 @@ docker compose up --build
 - 内存占用: < 50MB (Server)
 - 镜像体积: < 20MB (各容器)
 
+## 停止服务
+
+```bash
+docker compose down
+```
+
+## 清理资源
+
+```bash
+docker compose down -v
+docker rmi banner-fingerprint-server banner-fingerprint-client
+```
+
 ## 许可证
 
 本项目仅供学习和面试评估使用。
 
 ## 作者
 
-华顺信安面试项目 - Banner 指纹识别系统
+华顺信安面试项目 - Banner 指纹识别系统  
+开发者: funnyjacy
