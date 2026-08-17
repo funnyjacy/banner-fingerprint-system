@@ -3,6 +3,10 @@ FROM golang:1.21-alpine AS builder
 
 WORKDIR /build
 
+# 配置 Go 代理
+ENV GOPROXY=https://goproxy.cn,direct
+ENV GOSUMDB=off
+
 # 复制 go.mod 并下载依赖
 COPY go.mod ./
 RUN go mod download

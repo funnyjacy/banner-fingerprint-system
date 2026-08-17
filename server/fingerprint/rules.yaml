@@ -61,6 +61,10 @@ rules:
         product: "MySQL"
         version_group: 1
         confidence: 0.9
+      - regex: "\\\\n([0-9.]+)\\\\u0000"
+        product: "MySQL"
+        version_group: 1
+        confidence: 0.9
       - regex: "mysql"
         product: "MySQL"
         confidence: 0.7
